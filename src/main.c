@@ -12,8 +12,8 @@ LOG_MODULE_REGISTER(led_control, LOG_LEVEL_DBG);
 	static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED_NODE, gpios);
 	#define USE_NATIVE_LED 1
 #else
-	/* Manual configuration for ESP32-S3 (GPIO2 = LED) */
-	#define MANUAL_LED_GPIO_CONTROLLER DT_NODELABEL(gpio2)
+	/* Manual configuration for ESP32-S3 */
+	#define MANUAL_LED_GPIO_CONTROLLER DT_NODELABEL(gpio0)
 	#define MANUAL_LED_GPIO_PIN 2
 	#define MANUAL_LED_GPIO_FLAGS GPIO_ACTIVE_HIGH
 	static const struct gpio_dt_spec led = {
@@ -22,7 +22,7 @@ LOG_MODULE_REGISTER(led_control, LOG_LEVEL_DBG);
 		.dt_flags = MANUAL_LED_GPIO_FLAGS
 	};
 	#define USE_NATIVE_LED 0
-	#pragma message "LED: using GPIO2 (manual configuration)"
+	#pragma message "LED: using GPIO0 (manual configuration)"
 #endif
 
 /* Button GPIO - Try to use sw0, otherwise use manual configuration */
@@ -31,7 +31,7 @@ LOG_MODULE_REGISTER(led_control, LOG_LEVEL_DBG);
 	static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(BUTTON_NODE, gpios);
 	#define USE_NATIVE_BUTTON 1
 #else
-	/* Manual configuration for ESP32-S3 (GPIO0 = button BOOT) (GPIO0 = button BOOT) */
+	/* Manual configuration for ESP32-S3 (GPIO0 = button BOOT) */
 	#define MANUAL_BUTTON_GPIO_CONTROLLER DT_NODELABEL(gpio0)
 	#define MANUAL_BUTTON_GPIO_PIN 0
 	#define MANUAL_BUTTON_GPIO_FLAGS (GPIO_ACTIVE_LOW | GPIO_PULL_UP)
