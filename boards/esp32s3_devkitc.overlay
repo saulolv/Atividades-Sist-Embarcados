@@ -1,6 +1,25 @@
+/*
+ * Overlay for ESP32-S3 DevKit C
+ * 
+ * Note: sw0 (BOOT button) is already defined in the base devicetree.
+ * We only need to add led0 and configure PWM for LEDC.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
 / {
 	aliases {
+		led0 = &led0;
+		/* sw0 already defined in base DTS as BOOT button (GPIO0) */
 		pwm-led0 = &ledc0;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		led0: led_0 {
+			gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+			label = "User LED";
+		};
 	};
 };
 
