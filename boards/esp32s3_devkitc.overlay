@@ -1,0 +1,12 @@
+/ {
+	aliases {
+		pwm-led0 = &ledc0;
+	};
+};
+
+&ledc0 {
+	status = "okay";
+	channel0 {
+		gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+	};
+};
