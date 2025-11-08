@@ -1,185 +1,131 @@
-/*
- * Multi-thread pipeline with two msg_queues:
- * - Producers (Temperature, Humidity) -> input_msgq
- * - Filter thread validates -> output_msgq (valid) or logs (invalid)
- * - Consumer reads only from output_msgq
- */
-
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/sys/util.h>
+#include <zephyr/net/conn_mgr.h>
+#include <zephyr/net/net_event.h>
+#include <zephyr/net/sntp.h>
+#include <zbus/zbus.h>
+#include <time.h>
 
 LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
-enum sensor_type {
-	SENSOR_TEMPERATURE = 0,
-	SENSOR_HUMIDITY = 1,
+/* ZBus channel definition */
+struct time_msg {
+	struct tm time;
 };
 
-struct sensor_message {
-	enum sensor_type type;
-	int value; /* Temperature: deg C, Humidity: % RH */
-	uint32_t sequence;
-};
+ZBUS_CHAN_DEFINE(time_channel,			/* Name */
+		 struct time_msg,		/* Message type */
+		 NULL,				/* Validator */
+		 NULL,				/* User data */
+		 ZBUS_OBSERVERS_EMPTY,		/* observers */
+		 ZBUS_MSG_INIT(.time = { 0 })); /* Initial value */
 
-K_MSGQ_DEFINE(input_msgq, sizeof(struct sensor_message), 16, 4);
-K_MSGQ_DEFINE(output_msgq, sizeof(struct sensor_message), 16, 4);
+static struct net_mgmt_event_callback mgmt_cb;
+static K_SEM_DEFINE(net_connected, 0, 1);
 
-
-/**
- * @brief Convert sensor type to string
- * 
- * @param type Sensor type
- * @return const char* String representation of sensor type
- */
-static const char *sensor_type_to_str(enum sensor_type type)
+static void net_event_handler(struct net_mgmt_event_callback *cb, uint32_t mgmt_event,
+			      struct net_if *iface)
 {
-	switch (type) {
-	case SENSOR_TEMPERATURE:
-		return "temperature";
-	case SENSOR_HUMIDITY:
-		return "humidity";
-	default:
-		return "unknown";
+	if (mgmt_event == NET_EVENT_IPV4_ADDR_ADD) {
+		k_sem_give(&net_connected);
+		LOG_INF("Network connected");
 	}
 }
 
-/**
- * @brief Validate sensor message
- * 
- * @param msg Sensor message
- * @return true if message is valid, false otherwise
- */
-static bool validate_message(const struct sensor_message *msg)
+static void sntp_client_thread(void)
 {
-	if (msg->type == SENSOR_TEMPERATURE) {
-		return (msg->value >= 18) && (msg->value <= 30);
-	}
-	if (msg->type == SENSOR_HUMIDITY) {
-		return (msg->value >= 40) && (msg->value <= 70);
-	}
-	return false;
-}
+	LOG_INF("SNTP client thread started");
 
-/**
- * @brief Temperature producer
- * 
- * @param p1 Pointer to unused parameters
- * @param p2 Pointer to unused parameters
- * @param p3 Pointer to unused parameters
- */
-static void temperature_producer(void *p1, void *p2, void *p3)
-{
-	ARG_UNUSED(p1);
-	ARG_UNUSED(p2);
-	ARG_UNUSED(p3);
+	/* Wait for network connection */
+	net_mgmt_init_event_callback(&mgmt_cb, net_event_handler, NET_EVENT_IPV4_ADDR_ADD);
+	net_mgmt_add_event_callback(&mgmt_cb);
+	LOG_INF("Waiting for network connection...");
+	k_sem_take(&net_connected, K_FOREVER);
+	net_mgmt_del_event_callback(&mgmt_cb);
 
-	static const int temp_values[] = { 22, 17, 29, 31, 26 };
-	uint32_t seq = 0;
-	size_t idx = 0;
+	struct sntp_time sntp_time;
+	int rv;
 
-	while (true) {
-		struct sensor_message msg = {
-			.type = SENSOR_TEMPERATURE,
-			.value = temp_values[idx],
-			.sequence = seq++,
-		};
-		k_msgq_put(&input_msgq, &msg, K_FOREVER);
-		LOG_INF("Producer[T]: %s=%d (seq=%u)", sensor_type_to_str(msg.type), msg.value, msg.sequence);
-		idx = (idx + 1) % ARRAY_SIZE(temp_values);
-		k_msleep(800);
-	}
-}
+	while (1) {
+		rv = sntp_simple(CONFIG_SNTP_SERVER, 3000, &sntp_time);
+		if (rv == 0) {
+			struct tm current_time;
+			time_t t = sntp_time.seconds;
 
-/**
- * @brief Humidity producer
- * 
- * @param p1 Pointer to unused parameters
- * @param p2 Pointer to unused parameters
- * @param p3 Pointer to unused parameters
- */
-static void humidity_producer(void *p1, void *p2, void *p3)
-{
-	ARG_UNUSED(p1);
-	ARG_UNUSED(p2);
-	ARG_UNUSED(p3);
+			gmtime_r(&t, &current_time);
 
-	static const int rh_values[] = { 45, 35, 60, 75, 50 };
-	uint32_t seq = 0;
-	size_t idx = 0;
+			/* Set system clock */
+			struct timespec ts = { .tv_sec = t, .tv_nsec = 0 };
+			clock_settime(CLOCK_REALTIME, &ts);
 
-	while (true) {
-		struct sensor_message msg = {
-			.type = SENSOR_HUMIDITY,
-			.value = rh_values[idx],
-			.sequence = seq++,
-		};
-		k_msgq_put(&input_msgq, &msg, K_FOREVER);
-		LOG_INF("Producer[H]: %s=%d (seq=%u)", sensor_type_to_str(msg.type), msg.value, msg.sequence);
-		idx = (idx + 1) % ARRAY_SIZE(rh_values);
-		k_msleep(1000);
-	}
-}
+			struct time_msg msg = { .time = current_time };
+			zbus_chan_pub(&time_channel, &msg, K_MSEC(500));
+			LOG_INF("SNTP sync successful. Time published to ZBus.");
+			char buffer[30];
+			strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &current_time);
+			LOG_INF("Current time: %s", buffer);
 
-/**
- * @brief Filter thread
- * 
- * @param p1 Pointer to unused parameters
- * @param p2 Pointer to unused parameters
- * @param p3 Pointer to unused parameters
- */
-static void filter_thread(void *p1, void *p2, void *p3)
-{
-	ARG_UNUSED(p1);
-	ARG_UNUSED(p2);
-	ARG_UNUSED(p3);
-
-	while (true) {
-		struct sensor_message msg;
-		k_msgq_get(&input_msgq, &msg, K_FOREVER);
-
-		if (validate_message(&msg)) {
-			k_msgq_put(&output_msgq, &msg, K_FOREVER);
-			LOG_INF("Filter: valid %s=%d (seq=%u)", sensor_type_to_str(msg.type), msg.value, msg.sequence);
 		} else {
-			LOG_WRN("Filter: INVALID %s=%d (seq=%u)", sensor_type_to_str(msg.type), msg.value, msg.sequence);
+			LOG_WRN("SNTP sync failed: %d", rv);
+		}
+		k_sleep(K_MINUTES(5));
+	}
+}
+
+static void logger_thread(void)
+{
+	const struct zbus_channel *chan;
+	struct time_msg msg;
+
+	LOG_INF("Logger thread started");
+
+	while (!zbus_sub_wait(&time_sub, &chan, K_FOREVER)) {
+		if (&time_channel == chan) {
+			zbus_chan_read(&time_channel, &msg, K_MSEC(500));
+			char buffer[30];
+			strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &msg.time);
+			LOG_INF("Logger: Received new time -> %s", buffer);
 		}
 	}
 }
 
-/**
- * @brief Consumer thread
- * 
- * @param p1 Pointer to unused parameters
- * @param p2 Pointer to unused parameters
- * @param p3 Pointer to unused parameters
- */
-static void consumer_thread(void *p1, void *p2, void *p3)
+static void application_thread(void)
 {
-	ARG_UNUSED(p1);
-	ARG_UNUSED(p2);
-	ARG_UNUSED(p3);
+	const struct zbus_channel *chan;
+	struct time_msg msg;
+	static time_t last_event_time = 0;
 
-	while (true) {
-		struct sensor_message msg;
-		k_msgq_get(&output_msgq, &msg, K_FOREVER);
-		LOG_INF("Consumer: storing %s=%d (seq=%u)", sensor_type_to_str(msg.type), msg.value, msg.sequence);
-		/* Simulate processing time */
-		k_msleep(200);
+	LOG_INF("Application thread started");
+
+	while (!zbus_sub_wait(&app_sub, &chan, K_FOREVER)) {
+		if (&time_channel == chan) {
+			zbus_chan_read(&time_channel, &msg, K_MSEC(500));
+			time_t current_time = mktime(&msg.time);
+			if (last_event_time != 0) {
+				LOG_INF("Application: Time since last event: %lld seconds",
+					current_time - last_event_time);
+			} else {
+				LOG_INF("Application: First time event received.");
+			}
+			last_event_time = current_time;
+		}
 	}
 }
 
-#define STACK_SIZE 1024
-#define PRIORITY 7
+/* Thread definitions */
+K_THREAD_DEFINE(sntp_client_tid, 2048, sntp_client_thread, NULL, NULL, NULL, 7, 0, 0);
+K_THREAD_DEFINE(logger_tid, 1024, logger_thread, NULL, NULL, NULL, 7, 0, 0);
+K_THREAD_DEFINE(application_tid, 1024, application_thread, NULL, NULL, NULL, 7, 0, 0);
 
-K_THREAD_DEFINE(temp_producer_tid, STACK_SIZE, temperature_producer, NULL, NULL, NULL, PRIORITY, 0, 0);
-K_THREAD_DEFINE(humid_producer_tid, STACK_SIZE, humidity_producer, NULL, NULL, NULL, PRIORITY, 0, 0);
-K_THREAD_DEFINE(filter_tid, STACK_SIZE, filter_thread, NULL, NULL, NULL, PRIORITY, 0, 0);
-K_THREAD_DEFINE(consumer_tid, STACK_SIZE, consumer_thread, NULL, NULL, NULL, PRIORITY, 0, 0);
+/* ZBus subscriber definitions */
+ZBUS_SUBSCRIBER_DEFINE(time_sub, 4);
+ZBUS_SUBSCRIBER_DEFINE(app_sub, 4);
+
+ZBUS_CHAN_ADD_OBS(time_channel, time_sub, app_sub);
 
 void main(void)
 {
-	LOG_INF("Starting pipeline: producers -> input_msgq -> filter -> output_msgq -> consumer");
+	/* The threads are started automatically by the kernel. */
 }
 
 
