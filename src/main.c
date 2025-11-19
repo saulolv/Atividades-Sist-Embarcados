@@ -1,131 +1,133 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/net/conn_mgr.h>
-#include <zephyr/net/net_event.h>
-#include <zephyr/net/sntp.h>
-#include <zbus/zbus.h>
-#include <time.h>
+#include <zephyr/zbus/zbus.h>
+#include <string.h>
+#include "common.h"
+#include "threads.h"
 
-LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(main_control, LOG_LEVEL_INF);
 
-/* ZBus channel definition */
-struct time_msg {
-	struct tm time;
-};
+K_MSGQ_DEFINE(sensor_msgq, sizeof(sensor_data_t), 10, 4); // Message Queue for Sensor Data
+K_MSGQ_DEFINE(display_msgq, sizeof(display_data_t), 10, 4); // Message Queue for Display Data
 
-ZBUS_CHAN_DEFINE(time_channel,			/* Name */
-		 struct time_msg,		/* Message type */
-		 NULL,				/* Validator */
-		 NULL,				/* User data */
-		 ZBUS_OBSERVERS_EMPTY,		/* observers */
-		 ZBUS_MSG_INIT(.time = { 0 })); /* Initial value */
+// ZBUS Channels
+ZBUS_CHAN_DEFINE(camera_trigger_chan, camera_trigger_t, NULL, NULL, ZBUS_OBSERVERS_EMPTY, ZBUS_MSG_INIT(0));
+ZBUS_CHAN_DEFINE(camera_result_chan, camera_result_t, NULL, NULL, ZBUS_OBSERVERS_EMPTY, ZBUS_MSG_INIT(0));
 
-static struct net_mgmt_event_callback mgmt_cb;
-static K_SEM_DEFINE(net_connected, 0, 1);
+// Thread Definitions
+K_THREAD_DEFINE(sensor_tid, 2048, sensor_thread_entry, NULL, NULL, NULL, 7, 0, 0);
+K_THREAD_DEFINE(display_tid, 2048, display_thread_entry, NULL, NULL, NULL, 7, 0, 0);
+K_THREAD_DEFINE(camera_tid, 2048, camera_thread_entry, NULL, NULL, NULL, 7, 0, 0);
 
-static void net_event_handler(struct net_mgmt_event_callback *cb, uint32_t mgmt_event,
-			      struct net_if *iface)
-{
-	if (mgmt_event == NET_EVENT_IPV4_ADDR_ADD) {
-		k_sem_give(&net_connected);
-		LOG_INF("Network connected");
-	}
+// Subscriber for Main Thread
+ZBUS_SUBSCRIBER_DEFINE(main_camera_sub, 4);
+
+/**
+ * Validates a Mercosul plate number.
+ * @param plate The plate number to validate.
+ * @return True if the plate number is valid, false otherwise.
+ */
+static bool validate_plate(const char *plate) {
+    if (strlen(plate) != 7) return false;
+    // Check LLL (Letters)
+    for (int i = 0; i < 3; i++) if (plate[i] < 'A' || plate[i] > 'Z') return false;
+    // Check N (Number)
+    if (plate[3] < '0' || plate[3] > '9') return false;
+    // Check L (Letter)
+    if (plate[4] < 'A' || plate[4] > 'Z') return false;
+    // Check NN (Numbers)
+    for (int i = 5; i < 7; i++) if (plate[i] < '0' || plate[i] > '9') return false;
+    return true;
 }
 
-static void sntp_client_thread(void)
-{
-	LOG_INF("SNTP client thread started");
+int main(void) {
+    LOG_INF("Radar System Initializing...");
 
-	/* Wait for network connection */
-	net_mgmt_init_event_callback(&mgmt_cb, net_event_handler, NET_EVENT_IPV4_ADDR_ADD);
-	net_mgmt_add_event_callback(&mgmt_cb);
-	LOG_INF("Waiting for network connection...");
-	k_sem_take(&net_connected, K_FOREVER);
-	net_mgmt_del_event_callback(&mgmt_cb);
+	// Subscribe to the camera result channel
+    zbus_chan_add_obs(&camera_result_chan, &main_camera_sub, K_FOREVER);
 
-	struct sntp_time sntp_time;
-	int rv;
+    sensor_data_t s_data;
+    const struct zbus_channel *chan; // ZBUS channel for camera results
 
-	while (1) {
-		rv = sntp_simple(CONFIG_SNTP_SERVER, 3000, &sntp_time);
-		if (rv == 0) {
-			struct tm current_time;
-			time_t t = sntp_time.seconds;
+    while (1) {
+        // Check for new sensor data
+        if (k_msgq_get(&sensor_msgq, &s_data, K_NO_WAIT) == 0) {
+            // Calculate Speed
+            uint32_t distance_mm = CONFIG_RADAR_SENSOR_DISTANCE_MM;
+            uint32_t speed_kmh = 0;
+            if (s_data.duration_ms > 0) {
+                // Speed (km/h) = (dist_mm / time_ms) * 3.6
+                // = (dist * 36) / (time * 10)
+                // Use uint64_t to prevent overflow before division
+                speed_kmh = (uint32_t)(((uint64_t)distance_mm * 36) / (s_data.duration_ms * 10));
+            }
 
-			gmtime_r(&t, &current_time);
+            // Determine Limit
+            uint32_t limit = (s_data.type == VEHICLE_LIGHT) ? 
+                             CONFIG_RADAR_SPEED_LIMIT_LIGHT_KMH : 
+                             CONFIG_RADAR_SPEED_LIMIT_HEAVY_KMH;
+            
+            // Determine Status
+            display_status_t status = STATUS_NORMAL;
+            if (speed_kmh > limit) {
+                status = STATUS_INFRACTION;
+            } else {
+                uint32_t warning_thr = (limit * CONFIG_RADAR_WARNING_THRESHOLD_PERCENT) / 100;
+                if (speed_kmh >= warning_thr) {
+                    status = STATUS_WARNING;
+                }
+            }
 
-			/* Set system clock */
-			struct timespec ts = { .tv_sec = t, .tv_nsec = 0 };
-			clock_settime(CLOCK_REALTIME, &ts);
+            LOG_INF("Speed Calc: %d km/h (Limit: %d). Status: %d", speed_kmh, limit, status);
 
-			struct time_msg msg = { .time = current_time };
-			zbus_chan_pub(&time_channel, &msg, K_MSEC(500));
-			LOG_INF("SNTP sync successful. Time published to ZBus.");
-			char buffer[30];
-			strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &current_time);
-			LOG_INF("Current time: %s", buffer);
+            // Update Display
+            display_data_t d_data;
+            d_data.speed_kmh = speed_kmh;
+            d_data.limit_kmh = limit;
+            d_data.type = s_data.type;
+            d_data.status = status;
+            d_data.plate[0] = '\0';
+            // Send the display data to the display queue
+            k_msgq_put(&display_msgq, &d_data, K_NO_WAIT);
 
-		} else {
-			LOG_WRN("SNTP sync failed: %d", rv);
-		}
-		k_sleep(K_MINUTES(5));
-	}
+            // Trigger Camera if Infraction
+            if (status == STATUS_INFRACTION) {
+                camera_trigger_t trig;
+                trig.speed_kmh = speed_kmh;
+                trig.type = s_data.type;
+                zbus_chan_pub(&camera_trigger_chan, &trig, K_NO_WAIT);
+            }
+        }
+
+        // Check for Camera Results
+        if (zbus_sub_wait(&main_camera_sub, &chan, K_NO_WAIT) == 0) {
+			// Check if the channel is the camera result channel
+			if (chan == &camera_result_chan) {
+                camera_result_t res;
+				// Read the camera result
+                zbus_chan_read(&camera_result_chan, &res, K_NO_WAIT);
+                
+                // Check if the plate is valid
+                if (res.valid_read && validate_plate(res.plate)) {
+                    LOG_INF("Valid Plate: %s. Infraction Recorded.", res.plate);
+                    
+                    // Send plate info to display
+                    display_data_t d_data;
+                    d_data.speed_kmh = 0; 
+                    d_data.limit_kmh = 0;
+                    d_data.type = VEHICLE_UNKNOWN;
+                    d_data.status = STATUS_INFRACTION;
+                    strncpy(d_data.plate, res.plate, sizeof(d_data.plate));
+                    
+                    // Send the display data to the display queue
+                    k_msgq_put(&display_msgq, &d_data, K_NO_WAIT);
+                } else {
+                    LOG_WRN("Invalid Plate or Read Error");
+                }
+            }
+        }
+
+        k_msleep(10);
+    }
+    return 0;
 }
-
-static void logger_thread(void)
-{
-	const struct zbus_channel *chan;
-	struct time_msg msg;
-
-	LOG_INF("Logger thread started");
-
-	while (!zbus_sub_wait(&time_sub, &chan, K_FOREVER)) {
-		if (&time_channel == chan) {
-			zbus_chan_read(&time_channel, &msg, K_MSEC(500));
-			char buffer[30];
-			strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &msg.time);
-			LOG_INF("Logger: Received new time -> %s", buffer);
-		}
-	}
-}
-
-static void application_thread(void)
-{
-	const struct zbus_channel *chan;
-	struct time_msg msg;
-	static time_t last_event_time = 0;
-
-	LOG_INF("Application thread started");
-
-	while (!zbus_sub_wait(&app_sub, &chan, K_FOREVER)) {
-		if (&time_channel == chan) {
-			zbus_chan_read(&time_channel, &msg, K_MSEC(500));
-			time_t current_time = mktime(&msg.time);
-			if (last_event_time != 0) {
-				LOG_INF("Application: Time since last event: %lld seconds",
-					current_time - last_event_time);
-			} else {
-				LOG_INF("Application: First time event received.");
-			}
-			last_event_time = current_time;
-		}
-	}
-}
-
-/* Thread definitions */
-K_THREAD_DEFINE(sntp_client_tid, 2048, sntp_client_thread, NULL, NULL, NULL, 7, 0, 0);
-K_THREAD_DEFINE(logger_tid, 1024, logger_thread, NULL, NULL, NULL, 7, 0, 0);
-K_THREAD_DEFINE(application_tid, 1024, application_thread, NULL, NULL, NULL, 7, 0, 0);
-
-/* ZBus subscriber definitions */
-ZBUS_SUBSCRIBER_DEFINE(time_sub, 4);
-ZBUS_SUBSCRIBER_DEFINE(app_sub, 4);
-
-ZBUS_CHAN_ADD_OBS(time_channel, time_sub, app_sub);
-
-void main(void)
-{
-	/* The threads are started automatically by the kernel. */
-}
-
-
