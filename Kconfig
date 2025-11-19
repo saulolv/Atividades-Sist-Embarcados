@@ -1,11 +1,35 @@
+mainmenu "Radar Eletrônico com Classificação"
+
+config RADAR_SENSOR_DISTANCE_MM
+    int "Distance between sensors (mm)"
+    default 5000
+    help
+      Distance between the two magnetic sensors in millimeters.
+
+config RADAR_SPEED_LIMIT_LIGHT_KMH
+    int "Speed limit for light vehicles (km/h)"
+    default 60
+    help
+      Speed limit for vehicles classified as light.
+
+config RADAR_SPEED_LIMIT_HEAVY_KMH
+    int "Speed limit for heavy vehicles (km/h)"
+    default 40
+    help
+      Speed limit for vehicles classified as heavy.
+
+config RADAR_WARNING_THRESHOLD_PERCENT
+    int "Warning threshold percentage"
+    default 90
+    range 0 100
+    help
+      Percentage of the speed limit that triggers a warning.
+
+config RADAR_CAMERA_FAILURE_RATE_PERCENT
+    int "Camera simulated failure rate (%)"
+    default 10
+    range 0 100
+    help
+      Probability of the simulated camera failing to read a plate.
+
 source "Kconfig.zephyr"
-
-menu "SNTP Configuration"
-
-config SNTP_SERVER
-	string "SNTP Server Hostname"
-	default "time.google.com"
-	help
-	  Hostname of the SNTP server to sync with.
-
-endmenu
