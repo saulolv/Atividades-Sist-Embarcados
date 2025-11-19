@@ -3,20 +3,40 @@
 / {
     aliases {
         led0 = &led0;
-		led1 = &led1;
+        led1 = &led1;
+        sensor0 = &sensor_start;
+        sensor1 = &sensor_end;
     };
 
     leds {
-		compatible = "gpio-leds";
+        compatible = "gpio-leds";
+        led0: led0 {
+            gpios = <&gpio0 0 GPIO_ACTIVE_LOW>;
+            label = "LED 0";
+        };
+        led1: led1 {
+            gpios = <&gpio0 1 GPIO_ACTIVE_LOW>;
+            label = "LED 1";
+        };
+    };
 
-		led0: led0 {
-			gpios = <&gpio0 0 GPIO_ACTIVE_LOW>;
-			label = "GNSS LED";
-		};
+    /* Simulating sensors as buttons/keys for easy testing via QEMU monitor or just as GPIO inputs */
+    gpio_keys {
+        compatible = "gpio-keys";
+        sensor_start: sensor_start {
+            gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;
+            label = "Sensor Start / Axle Counter";
+        };
+        sensor_end: sensor_end {
+            gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+            label = "Sensor End";
+        };
+    };
 
-		led1: led1 {
-			gpios = <&gpio0 1 GPIO_ACTIVE_LOW>;
-			label = "LTE LED";
-		};
-	};
+    dummy_display: dummy_display {
+        compatible = "zephyr,dummy-display";
+        status = "okay";
+        height = <20>;
+        width = <20>;
+    };
 };
