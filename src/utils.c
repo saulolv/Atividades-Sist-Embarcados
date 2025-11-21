@@ -2,6 +2,11 @@
 #include <string.h>
 #include "common.h"
 
+/**
+ * Validates a Mercosul plate number.
+ * @param plate The plate number to validate.
+ * @return True if the plate number is valid, false otherwise.
+ */
 bool validate_plate(const char *plate) {
     if (strlen(plate) != 7) return false;
     // Check LLL
@@ -15,10 +20,16 @@ bool validate_plate(const char *plate) {
     return true;
 }
 
+
+/**
+ * Calculates the speed in km/h based on the distance and duration.
+ * @param distance_mm The distance in millimeters.
+ * @param duration_ms The duration in milliseconds.
+ * @return The speed in km/h.
+ */
 uint32_t calculate_speed(uint32_t distance_mm, uint32_t duration_ms) {
     if (duration_ms == 0) return 0;
     // Speed (km/h) = (dist_mm / time_ms) * 3.6
     // = (dist * 36) / (time * 10)
-    // Use uint64_t to prevent overflow before division
     return (uint32_t)(((uint64_t)distance_mm * 36) / (duration_ms * 10));
 }
