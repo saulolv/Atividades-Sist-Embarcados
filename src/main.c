@@ -22,24 +22,6 @@ K_THREAD_DEFINE(camera_tid, 2048, camera_thread_entry, NULL, NULL, NULL, 7, 0, 0
 // Subscriber for Main Thread
 ZBUS_SUBSCRIBER_DEFINE(main_camera_sub, 4);
 
-/**
- * Validates a Mercosul plate number.
- * @param plate The plate number to validate.
- * @return True if the plate number is valid, false otherwise.
- */
-static bool validate_plate(const char *plate) {
-    if (strlen(plate) != 7) return false;
-    // Check LLL (Letters)
-    for (int i = 0; i < 3; i++) if (plate[i] < 'A' || plate[i] > 'Z') return false;
-    // Check N (Number)
-    if (plate[3] < '0' || plate[3] > '9') return false;
-    // Check L (Letter)
-    if (plate[4] < 'A' || plate[4] > 'Z') return false;
-    // Check NN (Numbers)
-    for (int i = 5; i < 7; i++) if (plate[i] < '0' || plate[i] > '9') return false;
-    return true;
-}
-
 int main(void) {
     LOG_INF("Radar System Initializing...");
 
