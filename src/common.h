@@ -4,12 +4,14 @@
 #include <zephyr/kernel.h>
 #include <zephyr/zbus/zbus.h>
 
+// Vehicle Types
 typedef enum {
     VEHICLE_LIGHT,
     VEHICLE_HEAVY,
     VEHICLE_UNKNOWN
 } vehicle_type_t;
 
+// Data from Sensor Thread to Main Thread
 typedef struct {
     int64_t timestamp_start;
     int64_t timestamp_end;
@@ -56,5 +58,6 @@ extern struct k_msgq display_msgq;
 
 // Helper functions
 bool validate_plate(const char *plate);
+uint32_t calculate_speed(uint32_t distance_mm, uint32_t duration_ms);
 
 #endif

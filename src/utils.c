@@ -15,3 +15,10 @@ bool validate_plate(const char *plate) {
     return true;
 }
 
+uint32_t calculate_speed(uint32_t distance_mm, uint32_t duration_ms) {
+    if (duration_ms == 0) return 0;
+    // Speed (km/h) = (dist_mm / time_ms) * 3.6
+    // = (dist * 36) / (time * 10)
+    // Use uint64_t to prevent overflow before division
+    return (uint32_t)(((uint64_t)distance_mm * 36) / (duration_ms * 10));
+}

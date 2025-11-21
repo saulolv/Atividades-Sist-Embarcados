@@ -36,13 +36,8 @@ int main(void) {
         if (k_msgq_get(&sensor_msgq, &s_data, K_NO_WAIT) == 0) {
             // Calculate Speed
             uint32_t distance_mm = CONFIG_RADAR_SENSOR_DISTANCE_MM;
-            uint32_t speed_kmh = 0;
-            if (s_data.duration_ms > 0) {
-                // Speed (km/h) = (dist_mm / time_ms) * 3.6
-                // = (dist * 36) / (time * 10)
-                // Use uint64_t to prevent overflow before division
-                speed_kmh = (uint32_t)(((uint64_t)distance_mm * 36) / (s_data.duration_ms * 10));
-            }
+            uint32_t speed_kmh = calculate_speed(distance_mm, s_data.duration_ms);
+
 
             // Determine Limit
             uint32_t limit = (s_data.type == VEHICLE_LIGHT) ? 
