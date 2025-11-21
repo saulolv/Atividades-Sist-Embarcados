@@ -10,4 +10,5 @@ target_sources(app PRIVATE
     src/display_thread.c
     src/camera_thread.c
     src/traffic_sim.c
+    src/utils.c
 )

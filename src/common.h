@@ -54,4 +54,7 @@ ZBUS_CHAN_DECLARE(camera_result_chan);
 extern struct k_msgq sensor_msgq;
 extern struct k_msgq display_msgq;
 
+// Helper functions
+bool validate_plate(const char *plate);
+
 #endif
