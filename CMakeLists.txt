@@ -11,4 +11,5 @@ target_sources(app PRIVATE
     src/camera_thread.c
     src/traffic_sim.c
     src/utils.c
+    src/infraction_log.c
 )
