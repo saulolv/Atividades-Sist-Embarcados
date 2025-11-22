@@ -55,12 +55,30 @@ void display_thread_entry(void *p1, void *p2, void *p3) {
             // Print the display data to the console
             printk("\n%s========================================%s\n", color, ANSI_COLOR_RESET);
             printk("%s RADAR STATUS: %s %s\n", color, status_str, ANSI_COLOR_RESET);
-            printk(" Speed: %d km/h (Limit: %d km/h)\n", data.speed_kmh, data.limit_kmh);
-            printk(" Vehicle: %s\n", data.type == VEHICLE_LIGHT ? "Light" : "Heavy");
+            if (data.limit_kmh > 0) {
+                printk(" Velocidade: %d km/h\n", data.speed_kmh);
+                printk(" Limite: %d km/h (Alerta \xE2\x89\xA5 %d km/h)\n", data.limit_kmh, data.warning_kmh);
+            } else {
+                printk(" Velocidade: %d km/h\n", data.speed_kmh);
+                printk(" Limite: %d km/h\n", data.limit_kmh);
+            }
+            {
+                const char *tipo = "Desconhecido";
+                switch (data.type) {
+                    case VEHICLE_LIGHT: tipo = "Leve"; break;
+                    case VEHICLE_HEAVY: tipo = "Pesado"; break;
+                    case VEHICLE_UNKNOWN: default: tipo = "Desconhecido"; break;
+                }
+                printk(" Veiculo: %s", tipo);
+            }
+            if (data.axle_count > 0) {
+                printk(" (Eixos: %d)", data.axle_count);
+            }
+            printk("\n");
             
             // If the plate is not empty, print the plate
             if (data.plate[0] != '\0') {
-                printk(" PLATE: %s\n", data.plate);
+                printk(" Placa: %s\n", data.plate);
             }
             // Print the end of the display data
             printk("%s========================================%s\n\n", color, ANSI_COLOR_RESET);

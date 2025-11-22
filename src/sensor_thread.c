@@ -2,6 +2,7 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 #include "common.h"
+#include "sensor_fsm.h"
 
 LOG_MODULE_REGISTER(sensor_thread, LOG_LEVEL_INF);
 
@@ -9,17 +10,9 @@ LOG_MODULE_REGISTER(sensor_thread, LOG_LEVEL_INF);
 static const struct gpio_dt_spec sensor_start_spec = GPIO_DT_SPEC_GET(DT_ALIAS(sensor0), gpios);
 static const struct gpio_dt_spec sensor_end_spec = GPIO_DT_SPEC_GET(DT_ALIAS(sensor1), gpios);
 
-// State Machine
-typedef enum {
-    SENSOR_IDLE,
-    SENSOR_ACTIVE
-} sensor_state_t;
-
-static sensor_state_t state = SENSOR_IDLE; // State machine for the sensor
-static int64_t start_time = 0; // Start time of the vehicle
-static int64_t end_time = 0; // End time of the vehicle
-static uint32_t axle_count = 0; // Number of axles of the vehicle
-static bool speed_measured = false; // If the speed was measured
+// FSM + lock
+static sensor_fsm_t fsm;
+static struct k_spinlock fsm_lock;
 
 // Timer for Axle Counting Timeout
 static struct k_timer axle_timer;
@@ -41,19 +34,11 @@ static struct gpio_callback end_cb_data;
  */
 static void start_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
     int64_t now = k_uptime_get();
-    
-    if (state == SENSOR_IDLE) {
-        state = SENSOR_ACTIVE;
-        start_time = now;
-        axle_count = 1;
-        speed_measured = false;
-        // Start timeout timer (2 seconds to clear)
-        k_timer_start(&axle_timer, K_SECONDS(2), K_NO_WAIT);
-    } else {
-        axle_count++;
-        // Refresh timer
-        k_timer_start(&axle_timer, K_SECONDS(2), K_NO_WAIT);
-    }
+    k_spinlock_key_t key = k_spin_lock(&fsm_lock);
+    sensor_fsm_handle_start(&fsm, now);
+    k_spin_unlock(&fsm_lock, key);
+    // Start or refresh timeout timer (configurable)
+    k_timer_start(&axle_timer, K_MSEC(CONFIG_RADAR_AXLE_TIMEOUT_MS), K_NO_WAIT);
 }
 
 /**
@@ -63,10 +48,10 @@ static void start_isr(const struct device *dev, struct gpio_callback *cb, uint32
  * @param pins Pins that triggered the interrupt.
  */
 static void end_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
-    if (state == SENSOR_ACTIVE && !speed_measured) {
-        end_time = k_uptime_get();
-        speed_measured = true;
-    }
+    int64_t now = k_uptime_get();
+    k_spinlock_key_t key = k_spin_lock(&fsm_lock);
+    sensor_fsm_handle_end(&fsm, now);
+    k_spin_unlock(&fsm_lock, key);
 }
 
 /**
@@ -74,36 +59,29 @@ static void end_isr(const struct device *dev, struct gpio_callback *cb, uint32_t
  * @param timer_id Pointer to the timer.
  */
 static void axle_timer_expiry(struct k_timer *timer_id) {
-    // Timeout reached, assume vehicle passed
-    if (state == SENSOR_ACTIVE) {
-        if (speed_measured && end_time > start_time) {
-            // Valid reading
-            sensor_data_t data;
-            data.timestamp_start = start_time;
-            data.timestamp_end = end_time;
-            data.duration_ms = (uint32_t)(end_time - start_time);
-            data.axle_count = axle_count;
-            
-            // Classification
-            if (axle_count <= 2) {
-                data.type = VEHICLE_LIGHT;
-            } else {
-                data.type = VEHICLE_HEAVY;
-            }
-            
-            LOG_INF("Vehicle Detected: Axles=%d, Time=%d ms, Type=%s", 
-                    axle_count, data.duration_ms, 
-                    data.type == VEHICLE_LIGHT ? "Light" : "Heavy");
-            
-            k_msgq_put(&sensor_msgq, &data, K_NO_WAIT);
-        } else {
-            if (!speed_measured) {
-                LOG_WRN("Timeout: End sensor not triggered. Ignored.");
-            } else {
-                LOG_WRN("Invalid timing (End <= Start). Ignored.");
+    // Timeout reached, check if we can finalize a measurement
+    sensor_data_t data;
+    bool produced = false;
+    k_spinlock_key_t key = k_spin_lock(&fsm_lock);
+    produced = sensor_fsm_finalize(&fsm, &data);
+    k_spin_unlock(&fsm_lock, key);
+
+    if (produced) {
+        LOG_INF("Vehicle Detected: Axles=%d, Time=%d ms, Type=%s", 
+                data.axle_count, data.duration_ms, 
+                data.type == VEHICLE_LIGHT ? "Light" : "Heavy");
+        int ret = k_msgq_put(&sensor_msgq, &data, K_NO_WAIT);
+        if (ret != 0) {
+            /* Drop oldest and retry once */
+            sensor_data_t dropped;
+            (void)k_msgq_get(&sensor_msgq, &dropped, K_NO_WAIT);
+            ret = k_msgq_put(&sensor_msgq, &data, K_NO_WAIT);
+            if (ret != 0) {
+                LOG_WRN("sensor_msgq full, dropping measurement");
             }
         }
-        state = SENSOR_IDLE;
+    } else {
+        LOG_WRN("Measurement window ended without valid timing. Ignored.");
     }
 }
 
@@ -115,6 +93,8 @@ static void axle_timer_expiry(struct k_timer *timer_id) {
  */
 void sensor_thread_entry(void *p1, void *p2, void *p3) {
     int ret;
+
+    sensor_fsm_init(&fsm);
 
     // Check if the start sensor is ready
     if (!gpio_is_ready_dt(&sensor_start_spec)) {

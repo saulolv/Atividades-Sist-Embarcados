@@ -34,6 +34,8 @@ typedef struct {
     vehicle_type_t type;
     display_status_t status;
     char plate[10]; // Optional, for result display
+    uint32_t axle_count; // For UX display
+    uint32_t warning_kmh; // Threshold for yellow status
 } display_data_t;
 
 // ZBUS: Camera Trigger

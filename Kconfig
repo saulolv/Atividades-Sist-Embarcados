@@ -32,4 +32,32 @@ config RADAR_CAMERA_FAILURE_RATE_PERCENT
     help
       Probability of the simulated camera failing to read a plate.
 
+config RADAR_QUEUE_DEPTH
+	int "Message queue depth for radar queues"
+	default 10
+	range 1 128
+	help
+	  Number of messages buffered in sensor and display queues.
+
+config RADAR_INFRACTION_LOG_SIZE
+	int "Ring buffer size for infractions"
+	default 32
+	range 1 512
+	help
+	  Number of infraction records kept in memory.
+
+config RADAR_AXLE_TIMEOUT_MS
+	int "Axle counting timeout (ms)"
+	default 2000
+	range 100 10000
+	help
+	  Timeout after last axle pulse to finalize a measurement.
+
+config RADAR_TELEMETRY_INTERVAL_MS
+	int "Telemetry logging interval (ms)"
+	default 10000
+	range 500 600000
+	help
+	  Interval for periodic logging of counters and statistics.
+
 source "Kconfig.zephyr"
