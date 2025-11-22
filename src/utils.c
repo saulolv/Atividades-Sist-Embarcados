@@ -3,21 +3,50 @@
 #include "common.h"
 
 /**
+ * Converts a character to uppercase.
+ * @param c The character to convert.
+ * @return The uppercase character.
+ */
+static inline char util_to_upper_char(char c) {
+	if (c >= 'a' && c <= 'z') return (char)(c - 'a' + 'A');
+	return c;
+}
+
+/**
+ * Checks if a character is a letter.
+ * @param c The character to check.
+ * @return True if the character is a letter, false otherwise.
+ */
+static inline bool util_is_letter(char c) {
+	char u = util_to_upper_char(c);
+	return (u >= 'A' && u <= 'Z');
+}
+
+/**
+ * Checks if a character is a digit.
+ * @param c The character to check.
+ * @return True if the character is a digit, false otherwise.
+ */
+static inline bool util_is_digit(char c) {
+	return (c >= '0' && c <= '9');
+}
+
+/**
  * Validates a Mercosul plate number.
  * @param plate The plate number to validate.
  * @return True if the plate number is valid, false otherwise.
  */
 bool validate_plate(const char *plate) {
-    if (strlen(plate) != 7) return false;
-    // Check LLL
-    for (int i = 0; i < 3; i++) if (plate[i] < 'A' || plate[i] > 'Z') return false;
-    // Check N
-    if (plate[3] < '0' || plate[3] > '9') return false;
-    // Check L
-    if (plate[4] < 'A' || plate[4] > 'Z') return false;
-    // Check NN
-    for (int i = 5; i < 7; i++) if (plate[i] < '0' || plate[i] > '9') return false;
-    return true;
+	if (strlen(plate) != 7) return false;
+	// Check LLL
+	for (int i = 0; i < 3; i++) if (!util_is_letter(plate[i])) return false;
+	// Check N
+	if (!util_is_digit(plate[3])) return false;
+	// Check L
+	if (!util_is_letter(plate[4])) return false;
+	// Check NN
+	for (int i = 5; i < 7; i++) if (!util_is_digit(plate[i])) return false;
+	return true;
 }
 
 
